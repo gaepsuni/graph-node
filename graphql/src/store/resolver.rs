@@ -25,11 +25,32 @@ pub struct StoreResolver {
     logger: Logger,
     pub(crate) store: Arc<dyn QueryStore>,
     subscription_manager: Arc<dyn SubscriptionManager>,
-    pub(crate) block_ptr: Option<BlockPtr>,
+    pub(crate) block_ptr: Option<BlockPtrTs>,
     deployment: DeploymentHash,
     has_non_fatal_errors: bool,
     error_policy: ErrorPolicy,
     result_size: Arc<ResultSizeMetrics>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BlockPtrTs {
+    pub ptr: BlockPtr,
+    pub timestamp: Option<String>,
+}
+
+impl From<BlockPtr> for BlockPtrTs {
+    fn from(ptr: BlockPtr) -> Self {
+        Self {
+            ptr,
+            timestamp: None,
+        }
+    }
+}
+
+impl From<&BlockPtrTs> for BlockPtr {
+    fn from(ptr: &BlockPtrTs) -> Self {
+        ptr.ptr.cheap_clone()
+    }
 }
 
 impl CheapClone for StoreResolver {}
@@ -79,7 +100,7 @@ impl StoreResolver {
         let block_ptr = Self::locate_block(store_clone.as_ref(), bc, state).await?;
 
         let has_non_fatal_errors = store
-            .has_non_fatal_errors(Some(block_ptr.block_number()))
+            .has_non_fatal_errors(Some(block_ptr.ptr.block_number()))
             .await?;
 
         let resolver = StoreResolver {
@@ -98,15 +119,16 @@ impl StoreResolver {
     pub fn block_number(&self) -> BlockNumber {
         self.block_ptr
             .as_ref()
-            .map(|ptr| ptr.number as BlockNumber)
+            .map(|ptr| ptr.ptr.number as BlockNumber)
             .unwrap_or(BLOCK_NUMBER_MAX)
     }
 
+    /// locate_block returns the block pointer and it's timestamp when available.
     async fn locate_block(
         store: &dyn QueryStore,
         bc: BlockConstraint,
         state: &DeploymentState,
-    ) -> Result<BlockPtr, QueryExecutionError> {
+    ) -> Result<BlockPtrTs, QueryExecutionError> {
         fn check_ptr(
             state: &DeploymentState,
             block: BlockNumber,
@@ -116,23 +138,39 @@ impl StoreResolver {
                 .map_err(|msg| QueryExecutionError::ValueParseError("block.number".to_owned(), msg))
         }
 
+        fn get_block_ts(
+            store: &dyn QueryStore,
+            ptr: &BlockPtr,
+        ) -> Result<Option<String>, QueryExecutionError> {
+            match store
+                .block_number_with_timestamp(&ptr.hash)
+                .map_err(Into::<QueryExecutionError>::into)?
+            {
+                Some((_, Some(ts))) => Ok(Some(ts)),
+                _ => Ok(None),
+            }
+        }
+
         match bc {
             BlockConstraint::Hash(hash) => {
                 let ptr = store
-                    .block_number(&hash)
+                    .block_number_with_timestamp(&hash)
                     .map_err(Into::into)
-                    .and_then(|number| {
-                        number
+                    .and_then(|result| {
+                        result
                             .ok_or_else(|| {
                                 QueryExecutionError::ValueParseError(
                                     "block.hash".to_owned(),
                                     "no block with that hash found".to_owned(),
                                 )
                             })
-                            .map(|number| BlockPtr::new(hash, number))
+                            .map(|(number, ts)| BlockPtrTs {
+                                ptr: BlockPtr::new(hash, number),
+                                timestamp: ts,
+                            })
                     })?;
 
-                check_ptr(state, ptr.number)?;
+                check_ptr(state, ptr.ptr.number)?;
                 Ok(ptr)
             }
             BlockConstraint::Number(number) => {
@@ -143,13 +181,26 @@ impl StoreResolver {
                 // always return an all zeroes hash when users specify
                 // a block number
                 // See 7a7b9708-adb7-4fc2-acec-88680cb07ec1
-                Ok(BlockPtr::from((web3::types::H256::zero(), number as u64)))
+                Ok(BlockPtr::from((web3::types::H256::zero(), number as u64)).into())
             }
             BlockConstraint::Min(number) => {
                 check_ptr(state, number)?;
-                Ok(state.latest_block.cheap_clone())
+
+                let timestamp = get_block_ts(store, &state.latest_block)?;
+
+                Ok(BlockPtrTs {
+                    ptr: state.latest_block.cheap_clone(),
+                    timestamp,
+                })
             }
-            BlockConstraint::Latest => Ok(state.latest_block.cheap_clone()),
+            BlockConstraint::Latest => {
+                let timestamp = get_block_ts(store, &state.latest_block)?;
+
+                Ok(BlockPtrTs {
+                    ptr: state.latest_block.cheap_clone(),
+                    timestamp,
+                })
+            }
         }
     }
 
@@ -170,7 +221,7 @@ impl StoreResolver {
                     // locate_block indicates that we do not have a block hash
                     // by setting the hash to `zero`
                     // See 7a7b9708-adb7-4fc2-acec-88680cb07ec1
-                    let hash_h256 = ptr.hash_as_h256();
+                    let hash_h256 = ptr.ptr.hash_as_h256();
                     if hash_h256 == web3::types::H256::zero() {
                         None
                     } else {
@@ -181,12 +232,21 @@ impl StoreResolver {
             let number = self
                 .block_ptr
                 .as_ref()
-                .map(|ptr| r::Value::Int((ptr.number as i32).into()))
+                .map(|ptr| r::Value::Int((ptr.ptr.number as i32).into()))
                 .unwrap_or(r::Value::Null);
+
+            let timestamp = self.block_ptr.as_ref().map(|ptr| {
+                ptr.timestamp
+                    .clone()
+                    .map(|ts| r::Value::String(ts))
+                    .unwrap_or(r::Value::Null)
+            });
+
             let mut map = BTreeMap::new();
             let block = object! {
                 hash: hash,
                 number: number,
+                timestamp: timestamp,
                 __typename: BLOCK_FIELD_TYPE
             };
             map.insert("prefetch:block".into(), r::Value::List(vec![block]));

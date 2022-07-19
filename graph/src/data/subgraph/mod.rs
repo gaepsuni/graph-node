@@ -664,8 +664,7 @@ impl<C: Blockchain> SubgraphManifest<C> {
         // Assume the manifest has been validated, ensuring network names are homogenous
         self.data_sources
             .iter()
-            .filter_map(|d| d.network().map(|n| n.to_string()))
-            .next()
+            .find_map(|d| d.network().map(|n| n.to_string()))
             .expect("Validated manifest does not have a network defined on any datasource")
     }
 
