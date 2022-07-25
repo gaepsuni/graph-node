@@ -16,41 +16,11 @@ use graph::{
 };
 use graph::blockchain::BlockHash;
 
-use crate::{codec, data_source::*, TriggerData, TriggerFilter, TriggersAdapter};
+use crate::{codec, data_source::*, SubstreamBlock, TriggerData, TriggerFilter, TriggersAdapter};
 use crate::codec::EntitiesChanges;
 
 #[derive(Clone, Debug)]
 pub struct Block {}
-
-// todo: implement "block" with it's methods
-impl blockchain::Block for EntitiesChanges {
-    fn ptr(&self) -> BlockPtr {
-        return BlockPtr {
-            hash: BlockHash(Box::from(self.block_hash.as_slice())),
-            number: self.block_num as i32
-        }
-    }
-
-    fn parent_ptr(&self) -> Option<BlockPtr> {
-        todo!()
-    }
-
-    fn number(&self) -> i32 {
-        self.ptr().number
-    }
-
-    fn hash(&self) -> BlockHash {
-        self.ptr().hash
-    }
-
-    fn parent_hash(&self) -> Option<BlockHash> {
-        self.parent_ptr().map(|ptr| ptr.hash)
-    }
-
-    fn data(&self) -> Result<jsonrpc_core::serde_json::Value, jsonrpc_core::serde_json::Error> {
-        Ok(jsonrpc_core::serde_json::Value::Null)
-    }
-}
 
 #[derive(Debug)]
 pub struct Chain {
@@ -91,7 +61,7 @@ impl graph::blockchain::NodeCapabilities<Chain> for NodeCapabilities {
 impl Blockchain for Chain {
     const KIND: BlockchainKind = BlockchainKind::Substream;
 
-    type Block = codec::EntitiesChanges;
+    type Block = SubstreamBlock;
     type DataSource = DataSource;
     type UnresolvedDataSource = UnresolvedDataSource;
 

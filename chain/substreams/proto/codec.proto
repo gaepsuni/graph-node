@@ -3,11 +3,7 @@ syntax = "proto3";
 package substreams.entity.v1;
 
 message EntitiesChanges {
-  uint64 blockNum = 1;
-  bytes blockHash = 2;
-  uint64 parentBlockNum = 3;
-  bytes parentBlockHash = 4;
-  repeated EntityChange entityChanges = 5;
+  repeated EntityChange entityChanges = 1;
 }
 
 message EntityChange {
@@ -15,7 +11,7 @@ message EntityChange {
   bytes id = 2;
   uint64 ordinal = 3;
   enum Operation {
-    UNSET = 0;    // Protobuf default should not be used, this is used so that the consume can ensure that the value was actually specified
+    UNSET = 0; // Protobuf default should not be used, this is used so that the consume can ensure that the value was actually specified
     CREATE = 1;
     UPDATE = 2;
     DELETE = 3;
@@ -27,7 +23,7 @@ message EntityChange {
 message Field {
   string name = 1;
   enum Type {
-    UNSET = 0;    // Protobuf default should not be used, this is used so that the consume can ensure that the value was actually specified
+    UNSET = 0; // Protobuf default should not be used, this is used so that the consume can ensure that the value was actually specified
     BIGDECIMAL = 1;
     BIGINT = 2;
     INT = 3; // int32

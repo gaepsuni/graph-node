@@ -1,14 +1,6 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EntitiesChanges {
-    #[prost(uint64, tag="1")]
-    pub block_num: u64,
-    #[prost(bytes="vec", tag="2")]
-    pub block_hash: ::prost::alloc::vec::Vec<u8>,
-    #[prost(uint64, tag="3")]
-    pub parent_block_num: u64,
-    #[prost(bytes="vec", tag="4")]
-    pub parent_block_hash: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, repeated, tag="5")]
+    #[prost(message, repeated, tag="1")]
     pub entity_changes: ::prost::alloc::vec::Vec<EntityChange>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

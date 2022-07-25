@@ -9,5 +9,5 @@ $> export SUBSTREAMS_PACKAGE=path_to_your_spkg
 
 2. Run `substreams` example
 ```bash
-cargo run -p graph --example substreams [module_name]
+cargo run -p graph --example substreams [module_name] # for graph entities run `graph_out`
 ```

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::env;
 
 use anyhow::{format_err, Context, Error};
 use graph::{
@@ -7,12 +8,15 @@ use graph::{
     log::logger,
     substreams::{self, ForkStep},
 };
-use prost::Message;
+use prost::{DecodeError, Message};
 use tonic::Streaming;
+use graph::substreams::module_output::Data::{MapOutput, StoreDeltas};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let token_env = env_var("SF_API_TOKEN", "".to_string());
+    let module_name = env::args().nth(1).unwrap();
+
+    let token_env = env_var("SUBSTREAMS_API_TOKEN", "".to_string());
     let mut token: Option<String> = None;
     if token_env.len() > 0 {
         token = Some(token_env);
@@ -22,9 +26,10 @@ async fn main() -> Result<(), Error> {
         "SUBSTREAMS_ENDPOINT",
         "https://api-dev.streamingfast.io".to_string(),
     );
+
     let package_file = env_var("SUBSTREAMS_PACKAGE", "".to_string());
     if package_file == "" {
-        panic!("Environment variable SUBSTREAMS_PACKAGE must set");
+        panic!("Environment variable SUBSTREAMS_PACKAGE must be set");
     }
 
     let package = read_package(&package_file)?;
@@ -42,10 +47,10 @@ async fn main() -> Result<(), Error> {
             .substreams(substreams::Request {
                 // FIXME: Using 0 which I would have expected to mean "use package start's block"
                 // does not work, so we specify the range for now.
-                start_block_num: 12287507,
-                stop_block_num: 12292923,
+                start_block_num: 12369621,
+                stop_block_num: 12369821,
                 modules: package.modules.clone(),
-                output_modules: vec!["map_transfers".to_string()],
+                output_modules: vec![module_name.to_string()],
                 start_cursor: match &cursor {
                     Some(c) => c.clone(),
                     None => String::from(""),
@@ -90,12 +95,13 @@ async fn main() -> Result<(), Error> {
 }
 
 fn process_data(data: &substreams::BlockScopedData) {
+    println!("{}", format!("block number: {}", data.clock.as_ref().unwrap().number));
     if data
         .outputs
         .iter()
         .all(|output| match output.data.as_ref().unwrap() {
-            substreams::module_output::Data::MapOutput(result) => result.value.len() == 0,
-            substreams::module_output::Data::StoreDeltas(deltas) => deltas.deltas.len() == 0,
+            MapOutput(result) => result.value.len() == 0,
+            StoreDeltas(deltas) => deltas.deltas.len() == 0,
         })
     {
         return;
@@ -107,9 +113,9 @@ fn process_data(data: &substreams::BlockScopedData) {
             "{} => {}",
             output.name,
             match output.data.as_ref().unwrap() {
-                substreams::module_output::Data::MapOutput(result) =>
+                MapOutput(result) =>
                     format!("{} ({} bytes)", result.type_url, result.value.len()),
-                substreams::module_output::Data::StoreDeltas(deltas) => "store delta".to_string(),
+                StoreDeltas(deltas) => "store delta".to_string(),
             }
         )
     })
