@@ -14,15 +14,21 @@ use graph::{
     prelude::{async_trait, BlockNumber, ChainStore},
     slog::Logger,
 };
+use graph::blockchain::BlockHash;
 
-use crate::{data_source::*, TriggerData, TriggerFilter, TriggersAdapter};
+use crate::{codec, data_source::*, TriggerData, TriggerFilter, TriggersAdapter};
+use crate::codec::EntitiesChanges;
 
 #[derive(Clone, Debug)]
 pub struct Block {}
 
-impl blockchain::Block for Block {
+// todo: implement "block" with it's methods
+impl blockchain::Block for EntitiesChanges {
     fn ptr(&self) -> BlockPtr {
-        todo!()
+        return BlockPtr {
+            hash: BlockHash(Box::from(self.block_hash.as_slice())),
+            number: self.block_num as i32
+        }
     }
 
     fn parent_ptr(&self) -> Option<BlockPtr> {
@@ -33,11 +39,11 @@ impl blockchain::Block for Block {
         self.ptr().number
     }
 
-    fn hash(&self) -> blockchain::BlockHash {
+    fn hash(&self) -> BlockHash {
         self.ptr().hash
     }
 
-    fn parent_hash(&self) -> Option<blockchain::BlockHash> {
+    fn parent_hash(&self) -> Option<BlockHash> {
         self.parent_ptr().map(|ptr| ptr.hash)
     }
 
@@ -47,7 +53,14 @@ impl blockchain::Block for Block {
 }
 
 #[derive(Debug)]
-pub struct Chain {}
+pub struct Chain {
+
+}
+
+#[derive(Clone, Debug)]
+pub enum GraphEntityFinality {
+    // Final(Arc<>)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct NodeCapabilities {}
@@ -78,7 +91,7 @@ impl graph::blockchain::NodeCapabilities<Chain> for NodeCapabilities {
 impl Blockchain for Chain {
     const KIND: BlockchainKind = BlockchainKind::Substream;
 
-    type Block = Block;
+    type Block = codec::EntitiesChanges;
     type DataSource = DataSource;
     type UnresolvedDataSource = UnresolvedDataSource;
 

@@ -14,6 +14,7 @@ use crate::{
     chain::{Block, Chain},
     TriggerData,
 };
+use crate::codec::EntitiesChanges;
 
 pub const SUBSTREAMS_KIND: &str = "substreams";
 
@@ -84,7 +85,7 @@ impl blockchain::DataSource<Chain> for DataSource {
     fn match_and_decode(
         &self,
         _trigger: &TriggerData,
-        _block: &Arc<Block>,
+        _block: &Arc<EntitiesChanges>,
         _logger: &Logger,
     ) -> Result<Option<blockchain::TriggerWithHandler<Chain>>, Error> {
         unimplemented!()

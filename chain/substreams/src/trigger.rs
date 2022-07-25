@@ -6,6 +6,7 @@ use graph::{
 };
 
 use crate::{Block, Chain, DataSource, NodeCapabilities, NoopDataSourceTemplate};
+use crate::codec::EntitiesChanges;
 
 #[derive(Eq, PartialEq, PartialOrd, Ord, Debug)]
 pub struct TriggerData {}
@@ -55,7 +56,7 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
         &self,
         _ptr: BlockPtr,
         _offset: BlockNumber,
-    ) -> Result<Option<Block>, Error> {
+    ) -> Result<Option<EntitiesChanges>, Error> {
         unimplemented!()
     }
 
@@ -71,7 +72,7 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
     async fn triggers_in_block(
         &self,
         _logger: &Logger,
-        _block: Block,
+        _block: EntitiesChanges,
         _filter: &TriggerFilter,
     ) -> Result<BlockWithTriggers<Chain>, Error> {
         unimplemented!()
