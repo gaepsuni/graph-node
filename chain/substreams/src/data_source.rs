@@ -10,7 +10,7 @@ use graph::{
 };
 use serde::Deserialize;
 
-use crate::{chain::{Block, Chain}, SubstreamBlock, TriggerData};
+use crate::{chain::Chain, SubstreamBlock, TriggerData};
 
 pub const SUBSTREAMS_KIND: &str = "substreams";
 

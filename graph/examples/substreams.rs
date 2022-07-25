@@ -1,7 +1,9 @@
+use std::async_iter::AsyncIterator;
 use std::sync::Arc;
 use std::env;
 
 use anyhow::{format_err, Context, Error};
+use prometheus::Registry;
 use graph::{
     env::env_var,
     firehose::FirehoseEndpoint,
@@ -10,6 +12,9 @@ use graph::{
 };
 use prost::{DecodeError, Message};
 use tonic::Streaming;
+use graph::blockchain::substreams_block_stream;
+use graph::blockchain::substreams_block_stream::SubstreamsBlockStream;
+use graph::prelude::DeploymentHash;
 use graph::substreams::module_output::Data::{MapOutput, StoreDeltas};
 
 #[tokio::main]
@@ -35,13 +40,33 @@ async fn main() -> Result<(), Error> {
     let package = read_package(&package_file)?;
 
     let logger = logger(true);
+    // Set up Prometheus registry
+    let prometheus_registry = Arc::new(Registry::new());
+    let metrics_registry = Arc::new(MetricsRegistry::new(
+        logger.clone(),
+        prometheus_registry.clone(),
+    ));
+
     let firehose =
         Arc::new(FirehoseEndpoint::new(logger, "substreams", &endpoint, token, false).await?);
+
+    let substreams_block_stream = SubstreamsBlockStream::new(
+        DeploymentHash("substreams".to_string()),
+        firehose,
+        None,
+        None,
+        vec![12369621],
+        logger.clone(),
+        metrics_registry
+    );
 
     let cursor: Option<String> = None;
 
     loop {
         println!("Connecting to the stream!");
+
+        let _ = substreams_block_stream.stream.poll_next();
+
         let mut stream: Streaming<substreams::Response> = match firehose
             .clone()
             .substreams(substreams::Request {

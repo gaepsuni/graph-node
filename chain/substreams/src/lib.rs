@@ -30,7 +30,14 @@ impl blockchain::Block for SubstreamBlock {
     }
 
     fn parent_ptr(&self) -> Option<BlockPtr> {
-        todo!()
+        if self.parent_block_hash.is_empty() {
+            return None;
+        }
+
+        Some(BlockPtr {
+            hash: BlockHash(Box::from(self.parent_block_hash.as_slice())),
+            number: self.parent_block_num as i32
+        })
     }
 
     fn number(&self) -> i32 {

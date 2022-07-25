@@ -2,22 +2,15 @@ use core::fmt;
 use std::{str::FromStr, sync::Arc};
 
 use anyhow::Error;
-use graph::{
-    blockchain::{
-        self,
-        block_stream::{BlockStream, FirehoseCursor},
-        BlockPtr, Blockchain, BlockchainKind, IngestorError, RuntimeAdapter,
-    },
-    components::store::DeploymentLocator,
-    data::subgraph::UnifiedMappingApiVersion,
-    impl_slog_value,
-    prelude::{async_trait, BlockNumber, ChainStore},
-    slog::Logger,
-};
-use graph::blockchain::BlockHash;
+use graph::{blockchain::{
+    self,
+    block_stream::{BlockStream, FirehoseCursor},
+    BlockPtr, Blockchain, BlockchainKind, IngestorError, RuntimeAdapter,
+}, components::store::DeploymentLocator, data::subgraph::UnifiedMappingApiVersion, firehose, impl_slog_value, prelude::{async_trait, BlockNumber, ChainStore}, slog::Logger};
+use graph::blockchain::block_stream::{BlockStreamEvent, FirehoseError};
+use graph::substreams::ForkStep;
 
 use crate::{codec, data_source::*, SubstreamBlock, TriggerData, TriggerFilter, TriggersAdapter};
-use crate::codec::EntitiesChanges;
 
 #[derive(Clone, Debug)]
 pub struct Block {}
