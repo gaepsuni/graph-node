@@ -5,16 +5,15 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tonic::Status;
 
-use crate::blockchain::block_stream::{BlockWithTriggers, FirehoseCursor};
-use crate::blockchain::TriggerFilter;
+use crate::blockchain::block_stream::FirehoseCursor;
 use crate::prelude::*;
 use crate::util::backoff::ExponentialBackoff;
 
-use super::block_stream::{BlockStream, BlockStreamEvent, FirehoseMapper};
-use super::{Blockchain, TriggersAdapter};
+use super::block_stream::{BlockStream, BlockStreamEvent};
+use super::Blockchain;
 use crate::{firehose, firehose::FirehoseEndpoint, substreams};
-use crate::substreams::{Module, Modules, Request};
-use crate::substreams::module_output::Data::{MapOutput, StoreDeltas};
+use crate::substreams::{Modules, Request};
+use crate::substreams::response::Message;
 
 struct SubstreamsBlockStreamMetrics {
     deployment: DeploymentHash,
@@ -172,9 +171,9 @@ fn stream_blocks<C: Blockchain>(
 
     let mut latest_cursor = cursor.unwrap_or_else(|| "".to_string());
 
-    let mut subgraph_current_block = subgraph_current_block;
-    let mut start_block_num = manifest_start_block_num as i64;
-    let mut stop_block_num = manifest_end_block_num as u64;
+    let subgraph_current_block = subgraph_current_block;
+    let start_block_num = manifest_start_block_num as i64;
+    let stop_block_num = manifest_end_block_num as u64;
 
     // let mut check_subgraph_continuity = must_check_subgraph_continuity(
     //     &logger,
@@ -254,46 +253,26 @@ fn stream_blocks<C: Blockchain>(
                             &mut false,
                             manifest_start_block_num,
                             subgraph_current_block.as_ref(),
-                            // mapper.as_ref(),
-                            // &adapter,
-                            // &filter,
                             &logger,
                         ).await {
-                            Ok(BlockResponse::Proceed(event, cursor)) => {
-                                info!(&logger, "received event");
-                                // Reset backoff because we got a good value from the stream
-                                backoff.reset();
+                            Ok(block_response) => {
+                                match block_response {
+                                    None => {
 
-                                metrics.observe_response("proceed", &mut last_response_time);
+                                    }
+                                    Some(BlockResponse::Proceed(event, cursor)) => {
+                                        debug!(&logger, "received event");
+                                        // Reset backoff because we got a good value from the stream
+                                        backoff.reset();
 
-                                yield event;
+                                        metrics.observe_response("proceed", &mut last_response_time);
 
-                                latest_cursor = cursor;
-                            },
-                            Ok(BlockResponse::Rewind(revert_to)) => {
-                                info!(&logger, "received rewind");
-                                // Reset backoff because we got a good value from the stream
-                                backoff.reset();
+                                        yield event;
 
-                                metrics.observe_response("rewind", &mut last_response_time);
-
-                                // It's totally correct to pass the None as the cursor here, if we are here, there
-                                // was no cursor before anyway, so it's totally fine to pass `None`
-                                yield BlockStreamEvent::Revert(revert_to.clone(), FirehoseCursor::None);
-
-                                latest_cursor = "".to_string();
-
-                                // We have to reconnect (see below) but we don't wait to wait before doing
-                                // that, so skip the optional backing off at the end of the loop
-                                skip_backoff = true;
-
-                                // We must restart the stream to ensure we now send block from revert_to point
-                                // and we add + 1 to start block num because Firehose is inclusive and as such,
-                                // we need to move to "next" block.
-                                start_block_num = (revert_to.number + 1) as i64;
-                                subgraph_current_block = Some(revert_to);
-                                expected_stream_end = true;
-                                break;
+                                        latest_cursor = cursor;
+                                    }
+                                    _ => {}
+                                }
                             },
                             Err(err) => {
                                 info!(&logger, "received err");
@@ -340,111 +319,39 @@ enum BlockResponse<C: Blockchain> {
     Rewind(BlockPtr),
 }
 
-fn process_data(data: &substreams::BlockScopedData) {
-    println!("{}", format!("block number: {}", data.clock.as_ref().unwrap().number));
-    if data
-        .outputs
-        .iter()
-        .all(|output| match output.data.as_ref().unwrap() {
-            MapOutput(result) => result.value.len() == 0,
-            StoreDeltas(deltas) => deltas.deltas.len() == 0,
-        })
-    {
-        return;
-    }
-
-    println!("Received data for {} modules", data.outputs.len());
-    data.outputs.iter().for_each(|output| {
-        println!(
-            "{} => {}",
-            output.name,
-            match output.data.as_ref().unwrap() {
-                MapOutput(result) =>
-                    format!("{} ({} bytes)", result.type_url, result.value.len()),
-                StoreDeltas(deltas) => "store delta".to_string(),
-            }
-        )
-    })
-}
-
-fn process_progress(progress: &substreams::ModulesProgress, logger: &Logger) {
-    info!(&logger, "Received progress {}", progress.modules.len())
-}
-
 async fn process_substreams_response<C: Blockchain>(
     result: Result<substreams::Response, Status>,
-    check_subgraph_continuity: &mut bool,
-    manifest_start_block_num: BlockNumber,
-    subgraph_current_block: Option<&BlockPtr>,
-    // mapper: &F,
-    // adapter: &Arc<dyn TriggersAdapter<C>>,
-    // filter: &C::TriggerFilter,
+    _check_subgraph_continuity: &mut bool,
+    _manifest_start_block_num: BlockNumber,
+    _subgraph_current_block: Option<&BlockPtr>,
     logger: &Logger,
-) -> Result<BlockResponse<C>, Error> {
-    let response = return match result {
+) -> Result<Option<BlockResponse<C>>, Error> {
+    return match result {
         Ok(v) => {
-            info!(&logger, "response found in the result");
-
-            Ok(BlockResponse::Proceed(BlockStreamEvent::ProcessBlock(
-                BlockWithTriggers {
-                    block: msg,
-                    trigger_data: vec![]
-                },
-                FirehoseCursor::None), "".to_string()))
+            match v.message {
+                None => {
+                    Err(anyhow!("An error occurred while getting messages from response"))
+                }
+                Some(msg) => {
+                    debug!(&logger, "response found in the result");
+                    match msg {
+                        Message::Data(blk) => {
+                            debug!(&logger, "block scoped data found in the result");
+                            Ok(Some(BlockResponse::Proceed(BlockStreamEvent::ProcessSubstreamsBlock(
+                                blk,
+                                FirehoseCursor::None), "".to_string())))
+                        }
+                        Message::Progress(_) => {
+                            debug!(&logger, "received progress");
+                            Ok(None)
+                        }
+                        _ => Ok(None)
+                    }
+                }
+            }
         },
         Err(e) => Err(anyhow!("An error occurred while streaming blocks: {:?}", e)),
-    };
-
-    // let event = mapper
-    //     .to_block_stream_event(logger, &response, adapter, filter)
-    //     .await
-    //     .context("Mapping block to BlockStreamEvent failed")?;
-
-    // if *check_subgraph_continuity {
-    //     info!(logger, "Firehose started from a subgraph pointer without an existing cursor, ensuring chain continuity");
-    //
-    //     if let BlockStreamEvent::ProcessBlock(ref block, _) = event {
-    //         let previous_block_ptr = block.parent_ptr();
-    //         if previous_block_ptr.is_some() && previous_block_ptr.as_ref() != subgraph_current_block
-    //         {
-    //             warn!(&logger,
-    //                 "Firehose selected first streamed block's parent should match subgraph start block, reverting to last know final chain segment";
-    //                 "subgraph_current_block" => &subgraph_current_block.unwrap(),
-    //                 "firehose_start_block" => &previous_block_ptr.unwrap(),
-    //             );
-    //
-    //             let mut revert_to = mapper
-    //                 .final_block_ptr_for(logger, &block.block)
-    //                 .await
-    //                 .context("Could not fetch final block to revert to")?;
-    //
-    //             if revert_to.number < manifest_start_block_num {
-    //                 warn!(&logger, "We would return before subgraph manifest's start block, limiting rewind to manifest's start block");
-    //
-    //                 // We must revert up to parent's of manifest start block to ensure we delete everything "including" the start
-    //                 // block that was processed.
-    //                 let mut block_num = manifest_start_block_num - 1;
-    //                 if block_num < 0 {
-    //                     block_num = 0;
-    //                 }
-    //
-    //                 revert_to = mapper
-    //                     .block_ptr_for_number(logger, block_num)
-    //                     .await
-    //                     .context("Could not fetch manifest start block to revert to")?;
-    //             }
-    //
-    //             return Ok(BlockResponse::Rewind(revert_to));
-    //         }
-    //     }
-    //
-    //     info!(
-    //         logger,
-    //         "Subgraph chain continuity is respected, proceeding normally"
-    //     );
-    //     *check_subgraph_continuity = false;
-    // }
-    // Ok(BlockResponse::Proceed(event, response.cursor))
+    }
 }
 
 impl<C: Blockchain> Stream for SubstreamsBlockStream<C> {

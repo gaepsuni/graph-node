@@ -4,10 +4,11 @@ mod data_source;
 mod trigger;
 
 pub use chain::*;
+pub use trigger::*;
 pub use data_source::*;
+
 use graph::blockchain;
 use graph::blockchain::{BlockHash, BlockPtr};
-pub use trigger::*;
 use crate::codec::EntitiesChanges;
 
 #[derive(Clone, Debug)]

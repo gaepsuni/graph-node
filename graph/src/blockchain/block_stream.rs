@@ -12,6 +12,7 @@ use crate::components::store::{BlockNumber, DeploymentLocator};
 use crate::data::subgraph::UnifiedMappingApiVersion;
 use crate::firehose;
 use crate::{prelude::*, prometheus::labels};
+use crate::substreams::BlockScopedData;
 
 pub struct BufferedBlockStream<C: Blockchain> {
     inner: Pin<Box<dyn Stream<Item = Result<BlockStreamEvent<C>, Error>> + Send>>,
@@ -280,7 +281,7 @@ pub enum FirehoseError {
     #[error("received gRPC block payload cannot be decoded: {0}")]
     DecodingError(#[from] prost::DecodeError),
 
-    /// Some unknown error occured
+    /// Some unknown error occurred
     #[error("unknown error")]
     UnknownError(#[from] anyhow::Error),
 }
@@ -291,6 +292,8 @@ pub enum BlockStreamEvent<C: Blockchain> {
     Revert(BlockPtr, FirehoseCursor),
 
     ProcessBlock(BlockWithTriggers<C>, FirehoseCursor),
+
+    ProcessSubstreamsBlock(BlockScopedData, FirehoseCursor)
 }
 
 impl<C: Blockchain> Clone for BlockStreamEvent<C>
@@ -301,6 +304,7 @@ where
         match self {
             Self::Revert(arg0, arg1) => Self::Revert(arg0.clone(), arg1.clone()),
             Self::ProcessBlock(arg0, arg1) => Self::ProcessBlock(arg0.clone(), arg1.clone()),
+            Self::ProcessSubstreamsBlock(arg0, arg1) => Self::ProcessSubstreamsBlock(arg0.clone(), arg1.clone())
         }
     }
 }

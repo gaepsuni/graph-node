@@ -21,6 +21,7 @@ use graph::util::{backoff::ExponentialBackoff, lfu_cache::LfuCache};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use graph::substreams::BlockScopedData;
 
 use super::TriggerProcessor;
 
@@ -538,6 +539,10 @@ where
         cancel_handle: &CancelHandle,
     ) -> Result<Action, Error> {
         let action = match event {
+            Some(Ok(BlockStreamEvent::ProcessSubstreamsBlock(block, cursor))) => {
+                self.handle_process_substreams_block(block, cursor, cancel_handle)
+                    .await?
+            }
             Some(Ok(BlockStreamEvent::ProcessBlock(block, cursor))) => {
                 self.handle_process_block(block, cursor, cancel_handle)
                     .await?
@@ -568,6 +573,12 @@ trait StreamEventHandler<C: Blockchain> {
     async fn handle_process_block(
         &mut self,
         block: BlockWithTriggers<C>,
+        cursor: FirehoseCursor,
+        cancel_handle: &CancelHandle,
+    ) -> Result<Action, Error>;
+    async fn handle_process_substreams_block(
+        &mut self,
+        block: BlockScopedData,
         cursor: FirehoseCursor,
         cancel_handle: &CancelHandle,
     ) -> Result<Action, Error>;
@@ -786,6 +797,15 @@ where
                 }
             }
         }
+    }
+
+    async fn handle_process_substreams_block(
+        &mut self,
+        _block: BlockScopedData,
+        _cursor: FirehoseCursor,
+        _cancel_handle: &CancelHandle,
+    ) -> Result<Action, Error> {
+        Ok(Action::Continue)
     }
 
     async fn handle_revert(

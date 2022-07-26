@@ -6,12 +6,10 @@ use graph::{blockchain::{
     self,
     block_stream::{BlockStream, FirehoseCursor},
     BlockPtr, Blockchain, BlockchainKind, IngestorError, RuntimeAdapter,
-}, components::store::DeploymentLocator, data::subgraph::UnifiedMappingApiVersion, firehose, impl_slog_value, prelude::{async_trait, BlockNumber, ChainStore}, slog::Logger};
-use graph::blockchain::block_stream::{BlockStreamEvent, FirehoseError};
-use graph::substreams::ForkStep;
-use graph::substreams::response::Message;
+}, components::store::DeploymentLocator, data::subgraph::UnifiedMappingApiVersion, impl_slog_value, prelude::{async_trait, BlockNumber, ChainStore}, slog::Logger};
+use graph::substreams::BlockScopedData;
 
-use crate::{codec, data_source::*, SubstreamBlock, TriggerData, TriggerFilter, TriggersAdapter};
+use crate::{data_source::*, TriggerData, TriggerFilter, TriggersAdapter};
 
 #[derive(Clone, Debug)]
 pub struct Block {}
@@ -55,7 +53,7 @@ impl graph::blockchain::NodeCapabilities<Chain> for NodeCapabilities {
 impl Blockchain for Chain {
     const KIND: BlockchainKind = BlockchainKind::Substream;
 
-    type Block = Message;
+    type Block = BlockScopedData;
     type DataSource = DataSource;
     type UnresolvedDataSource = UnresolvedDataSource;
 
