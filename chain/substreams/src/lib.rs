@@ -19,8 +19,6 @@ pub struct SubstreamBlock {
     pub entities_changes: EntitiesChanges,
 }
 
-// todo: implement Block for substreamsBlock
-// then return in the substreams_block_stream
 impl blockchain::Block for SubstreamBlock {
     fn ptr(&self) -> BlockPtr {
         return BlockPtr {

@@ -9,6 +9,7 @@ use graph::{blockchain::{
 }, components::store::DeploymentLocator, data::subgraph::UnifiedMappingApiVersion, firehose, impl_slog_value, prelude::{async_trait, BlockNumber, ChainStore}, slog::Logger};
 use graph::blockchain::block_stream::{BlockStreamEvent, FirehoseError};
 use graph::substreams::ForkStep;
+use graph::substreams::response::Message;
 
 use crate::{codec, data_source::*, SubstreamBlock, TriggerData, TriggerFilter, TriggersAdapter};
 
@@ -54,7 +55,7 @@ impl graph::blockchain::NodeCapabilities<Chain> for NodeCapabilities {
 impl Blockchain for Chain {
     const KIND: BlockchainKind = BlockchainKind::Substream;
 
-    type Block = SubstreamBlock;
+    type Block = Message;
     type DataSource = DataSource;
     type UnresolvedDataSource = UnresolvedDataSource;
 

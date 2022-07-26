@@ -230,6 +230,7 @@ impl FirehoseEndpoint {
         Ok(block_stream)
     }
 }
+
 #[derive(Clone, Debug)]
 pub struct FirehoseEndpoints(Vec<Arc<FirehoseEndpoint>>);
 

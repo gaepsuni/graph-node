@@ -5,14 +5,16 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tonic::Status;
 
-use crate::blockchain::block_stream::FirehoseCursor;
+use crate::blockchain::block_stream::{BlockWithTriggers, FirehoseCursor};
 use crate::blockchain::TriggerFilter;
 use crate::prelude::*;
 use crate::util::backoff::ExponentialBackoff;
 
 use super::block_stream::{BlockStream, BlockStreamEvent, FirehoseMapper};
 use super::{Blockchain, TriggersAdapter};
-use crate::{firehose, firehose::FirehoseEndpoint};
+use crate::{firehose, firehose::FirehoseEndpoint, substreams};
+use crate::substreams::{Module, Modules, Request};
+use crate::substreams::module_output::Data::{MapOutput, StoreDeltas};
 
 struct SubstreamsBlockStreamMetrics {
     deployment: DeploymentHash,
@@ -105,33 +107,35 @@ impl SubstreamsBlockStreamMetrics {
 }
 
 pub struct SubstreamsBlockStream<C: Blockchain> {
-    pub stream: Pin<Box<dyn Stream<Item = Result<BlockStreamEvent<C>, Error>> + Send>>,
+    //fixme: not sure if this is ok to be set as public, maybe
+    // we do not want to expose the stream to the caller
+    stream: Pin<Box<dyn Stream<Item = Result<BlockStreamEvent<C>, Error>> + Send>>,
 }
 
 impl<C> SubstreamsBlockStream<C>
     where
         C: Blockchain,
 {
-    pub fn new<F>(
+    pub fn new(
         deployment: DeploymentHash,
         endpoint: Arc<FirehoseEndpoint>,
         subgraph_current_block: Option<BlockPtr>,
         cursor: Option<String>,
-        // mapper: Arc<F>,
-        // adapter: Arc<dyn TriggersAdapter<C>>,
-        // filter: Arc<C::TriggerFilter>,
+        modules: Option<Modules>,
+        module_name: String,
         start_blocks: Vec<BlockNumber>,
+        end_blocks: Vec<BlockNumber>,
         logger: Logger,
         registry: Arc<dyn MetricsRegistry>,
-    ) -> Self
-        where
-            F: FirehoseMapper<C> + 'static,
-    {
+    ) -> Self {
         let manifest_start_block_num = start_blocks
             .into_iter()
             .min()
-            // Firehose knows where to start the stream for the specific chain, 0 here means
-            // start at Genesis block.
+            .unwrap_or(0);
+
+        let manifest_end_block_num = end_blocks
+            .into_iter()
+            .min()
             .unwrap_or(0);
 
         let metrics =
@@ -141,10 +145,10 @@ impl<C> SubstreamsBlockStream<C>
             stream: Box::pin(stream_blocks(
                 endpoint,
                 cursor,
-                // mapper,
-                // adapter,
-                // filter,
+                modules,
+                module_name,
                 manifest_start_block_num,
+                manifest_end_block_num,
                 subgraph_current_block,
                 logger,
                 metrics,
@@ -156,10 +160,10 @@ impl<C> SubstreamsBlockStream<C>
 fn stream_blocks<C: Blockchain>(
     endpoint: Arc<FirehoseEndpoint>,
     cursor: Option<String>,
-    // mapper: Arc<F>,
-    // adapter: Arc<dyn TriggersAdapter<C>>,
-    // filter: Arc<C::TriggerFilter>,
+    modules: Option<Modules>,
+    module_name: String,
     manifest_start_block_num: BlockNumber,
+    manifest_end_block_num: BlockNumber,
     subgraph_current_block: Option<BlockPtr>,
     logger: Logger,
     metrics: SubstreamsBlockStreamMetrics,
@@ -169,41 +173,9 @@ fn stream_blocks<C: Blockchain>(
     let mut latest_cursor = cursor.unwrap_or_else(|| "".to_string());
 
     let mut subgraph_current_block = subgraph_current_block;
-    let mut start_block_num = subgraph_current_block
-        .as_ref()
-        .map(|ptr| {
-            // Firehose start block is inclusive while the subgraph_current_block is where the actual
-            // subgraph is currently at. So to process the actual next block, we must start one block
-            // further in the chain.
-            ptr.block_number() + 1 as BlockNumber
-        })
-        .unwrap_or(manifest_start_block_num);
+    let mut start_block_num = manifest_start_block_num as i64;
+    let mut stop_block_num = manifest_end_block_num as u64;
 
-    // Sanity check when starting from a subgraph block ptr directly. When
-    // this happens, we must ensure that Firehose first picked block directly follows the
-    // subgraph block ptr. So we check that Firehose first picked block's parent is
-    // equal to subgraph block ptr.
-    //
-    // This can happen for example when rewinding, unfailing a deterministic error or
-    // when switching from RPC to Firehose on Ethereum.
-    //
-    // What could go wrong is that the subgraph block ptr points to a forked block but
-    // since Firehose only accepts `block_number`, it could pick right away the canonical
-    // block of the longest chain creating inconsistencies in the data (because it would
-    // not revert the forked the block).
-    //
-    // If a Firehose cursor is present, it's used to resume the stream and as such, there is no need to
-    // perform the chain continuity check.
-    //
-    // If there was no cursor, now we need to check if the subgraph current block is set to something.
-    // When the graph node deploys a new subgraph, it always create a subgraph ptr for this subgraph, the
-    // initial subgraph block pointer points to the parent block of the manifest's start block, which is usually
-    // equivalent (but not always) to manifest's start block number - 1.
-    //
-    // Hence, we only need to check the chain continuity if the subgraph current block ptr is higher or equal
-    // to the subgraph manifest's start block number. Indeed, only in this case (and when there is no firehose
-    // cursor) it means the subgraph was started and advanced with something else than Firehose and as such,
-    // chain continuity check needs to be performed.
     // let mut check_subgraph_continuity = must_check_subgraph_continuity(
     //     &logger,
     //     &subgraph_current_block,
@@ -221,6 +193,17 @@ fn stream_blocks<C: Blockchain>(
     #[allow(unused_assignments)]
     let mut skip_backoff = false;
 
+    let request = Request {
+        start_block_num,
+        start_cursor: latest_cursor.clone(),
+        stop_block_num,
+        fork_steps: vec![StepNew as i32, StepUndo as i32],
+        irreversibility_condition: "".to_string(),
+        modules: modules,
+        output_modules: vec![module_name],
+        ..Default::default()
+    };
+
     try_stream! {
         loop {
             info!(
@@ -234,15 +217,26 @@ fn stream_blocks<C: Blockchain>(
             // We just reconnected, assume that we want to back off on errors
             skip_backoff = false;
 
-            let mut request = firehose::Request {
-                start_block_num: start_block_num as i64,
-                start_cursor: latest_cursor.clone(),
-                fork_steps: vec![StepNew as i32, StepUndo as i32],
-                ..Default::default()
-            };
+            // let mut request = firehose::Request {
+            //     start_block_num: start_block_num as i64,
+            //     start_cursor: latest_cursor.to_string(),
+            //     fork_steps: vec![StepNew as i32, StepUndo as i32],
+            //     ..Default::default()
+            // };
+            //
+            // let mut request = Request {
+            //     start_block_num,
+            //     stop_block_num,
+            //     start_cursor: latest_cursor,
+            //     fork_steps: vec![StepNew as i32, StepUndo as i32],
+            //     irreversibility_condition: "".to_string(),
+            //     modeules: modules.clone(),
+            //     output_modules: vec![module_name],
+            //     ..Default::default()
+            // };
 
             let mut connect_start = Instant::now();
-            let result = endpoint.clone().stream_blocks(request).await;
+            let result = endpoint.clone().substreams(request.clone()).await;
 
             match result {
                 Ok(stream) => {
@@ -254,7 +248,7 @@ fn stream_blocks<C: Blockchain>(
                     let mut last_response_time = Instant::now();
                     let mut expected_stream_end = false;
 
-                    for await response in stream {
+                    for await response in stream{
                         match process_substreams_response(
                             response,
                             &mut false,
@@ -266,6 +260,7 @@ fn stream_blocks<C: Blockchain>(
                             &logger,
                         ).await {
                             Ok(BlockResponse::Proceed(event, cursor)) => {
+                                info!(&logger, "received event");
                                 // Reset backoff because we got a good value from the stream
                                 backoff.reset();
 
@@ -276,6 +271,7 @@ fn stream_blocks<C: Blockchain>(
                                 latest_cursor = cursor;
                             },
                             Ok(BlockResponse::Rewind(revert_to)) => {
+                                info!(&logger, "received rewind");
                                 // Reset backoff because we got a good value from the stream
                                 backoff.reset();
 
@@ -294,12 +290,13 @@ fn stream_blocks<C: Blockchain>(
                                 // We must restart the stream to ensure we now send block from revert_to point
                                 // and we add + 1 to start block num because Firehose is inclusive and as such,
                                 // we need to move to "next" block.
-                                start_block_num = revert_to.number + 1;
+                                start_block_num = (revert_to.number + 1) as i64;
                                 subgraph_current_block = Some(revert_to);
                                 expected_stream_end = true;
                                 break;
                             },
                             Err(err) => {
+                                info!(&logger, "received err");
                                 // We have an open connection but there was an error processing the Firehose
                                 // response. We will reconnect the stream after this; this is the case where
                                 // we actually _want_ to back off in case we keep running into the same error.
@@ -343,8 +340,39 @@ enum BlockResponse<C: Blockchain> {
     Rewind(BlockPtr),
 }
 
+fn process_data(data: &substreams::BlockScopedData) {
+    println!("{}", format!("block number: {}", data.clock.as_ref().unwrap().number));
+    if data
+        .outputs
+        .iter()
+        .all(|output| match output.data.as_ref().unwrap() {
+            MapOutput(result) => result.value.len() == 0,
+            StoreDeltas(deltas) => deltas.deltas.len() == 0,
+        })
+    {
+        return;
+    }
+
+    println!("Received data for {} modules", data.outputs.len());
+    data.outputs.iter().for_each(|output| {
+        println!(
+            "{} => {}",
+            output.name,
+            match output.data.as_ref().unwrap() {
+                MapOutput(result) =>
+                    format!("{} ({} bytes)", result.type_url, result.value.len()),
+                StoreDeltas(deltas) => "store delta".to_string(),
+            }
+        )
+    })
+}
+
+fn process_progress(progress: &substreams::ModulesProgress, logger: &Logger) {
+    info!(&logger, "Received progress {}", progress.modules.len())
+}
+
 async fn process_substreams_response<C: Blockchain>(
-    result: Result<firehose::Response, Status>,
+    result: Result<substreams::Response, Status>,
     check_subgraph_continuity: &mut bool,
     manifest_start_block_num: BlockNumber,
     subgraph_current_block: Option<&BlockPtr>,
@@ -353,12 +381,18 @@ async fn process_substreams_response<C: Blockchain>(
     // filter: &C::TriggerFilter,
     logger: &Logger,
 ) -> Result<BlockResponse<C>, Error> {
-    let response = match result {
+    let response = return match result {
         Ok(v) => {
-            println!("block value: {:?}", v.block.as_ref().unwrap().value);
-            v
+            info!(&logger, "response found in the result");
+
+            Ok(BlockResponse::Proceed(BlockStreamEvent::ProcessBlock(
+                BlockWithTriggers {
+                    block: msg,
+                    trigger_data: vec![]
+                },
+                FirehoseCursor::None), "".to_string()))
         },
-        Err(e) => return Err(anyhow!("An error occurred while streaming blocks: {:?}", e)),
+        Err(e) => Err(anyhow!("An error occurred while streaming blocks: {:?}", e)),
     };
 
     // let event = mapper
@@ -410,11 +444,6 @@ async fn process_substreams_response<C: Blockchain>(
     //     );
     //     *check_subgraph_continuity = false;
     // }
-
-    Ok(BlockResponse::Rewind(BlockPtr{
-        hash: Default::default(),
-        number: 0
-    }))
     // Ok(BlockResponse::Proceed(event, response.cursor))
 }
 
