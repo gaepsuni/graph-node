@@ -95,15 +95,15 @@ impl blockchain::DataSource<Chain> for DataSource {
         unimplemented!("{}", DYNAMIC_DATA_SOURCE_ERROR)
     }
 
-    fn validate(&self) -> Vec<Error> {
-        todo!()
-    }
-
     fn from_stored_dynamic_data_source(
         _template: &<Chain as blockchain::Blockchain>::DataSourceTemplate,
         _stored: graph::components::store::StoredDynamicDataSource,
     ) -> Result<Self, Error> {
         Err(anyhow!(DYNAMIC_DATA_SOURCE_ERROR))
+    }
+
+    fn validate(&self) -> Vec<Error> {
+        todo!()
     }
 }
 

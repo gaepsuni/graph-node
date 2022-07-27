@@ -10,9 +10,9 @@ use super::{Block, BlockPtr, Blockchain};
 use crate::anyhow::Result;
 use crate::components::store::{BlockNumber, DeploymentLocator};
 use crate::data::subgraph::UnifiedMappingApiVersion;
-use crate::firehose;
-use crate::{prelude::*, prometheus::labels};
 use crate::substreams::BlockScopedData;
+use crate::{firehose, substreams};
+use crate::{prelude::*, prometheus::labels};
 
 pub struct BufferedBlockStream<C: Blockchain> {
     inner: Pin<Box<dyn Stream<Item = Result<BlockStreamEvent<C>, Error>> + Send>>,
@@ -275,6 +275,45 @@ pub trait FirehoseMapper<C: Blockchain>: Send + Sync {
     ) -> Result<BlockPtr, Error>;
 }
 
+#[async_trait]
+pub trait SubstreamsMapper<C: Blockchain>: Send + Sync {
+    async fn to_block_stream_event(
+        &self,
+        logger: &Logger,
+        response: &BlockScopedData,
+        // adapter: &Arc<dyn TriggersAdapter<C>>,
+        // filter: &C::TriggerFilter,
+    ) -> Result<Option<BlockStreamEvent<C>>, SubstreamsError>;
+
+    // /// Returns the [BlockPtr] value for this given block number. This is the block pointer
+    // /// of the longuest according to Firehose view of the blockchain state.
+    // ///
+    // /// This is a thin wrapper around [FirehoseEndpoint#block_ptr_for_number] to make
+    // /// it chain agnostic and callable from chain agnostic [FirehoseBlockStream].
+    // async fn block_ptr_for_number(
+    //     &self,
+    //     logger: &Logger,
+    //     number: BlockNumber,
+    // ) -> Result<BlockPtr, Error>;
+    //
+    // /// Returns the closest final block ptr to the block ptr received.
+    // /// On probablitics chain like Ethereum, final is determined by
+    // /// the confirmations threshold configured for the Firehose stack (currently
+    // /// hard-coded to 200).
+    // ///
+    // /// On some other chain like NEAR, the actual final block number is determined
+    // /// from the block itself since it contains information about which block number
+    // /// is final against the current block.
+    // ///
+    // /// To take an example, assuming we are on Ethereum, the final block pointer
+    // /// for block #10212 would be the determined final block #10012 (10212 - 200 = 10012).
+    // async fn final_block_ptr_for(
+    //     &self,
+    //     logger: &Logger,
+    //     block: &C::Block,
+    // ) -> Result<BlockPtr, Error>;
+}
+
 #[derive(Error, Debug)]
 pub enum FirehoseError {
     /// We were unable to decode the received block payload into the chain specific Block struct (e.g. chain_ethereum::pb::Block)
@@ -284,6 +323,23 @@ pub enum FirehoseError {
     /// Some unknown error occurred
     #[error("unknown error")]
     UnknownError(#[from] anyhow::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum SubstreamsError {
+    /// We were unable to decode the received block payload into the chain specific Block struct (e.g. chain_ethereum::pb::Block)
+    #[error("received gRPC block payload cannot be decoded: {0}")]
+    DecodingError(#[from] prost::DecodeError),
+
+    /// Some unknown error occurred
+    #[error("unknown error")]
+    UnknownError(#[from] anyhow::Error),
+
+    #[error("multiple module output error")]
+    MultipleModuleOutputError(),
+
+    #[error("unexpected store delta output")]
+    UnexpectedStoreDeltaOutput(),
 }
 
 #[derive(Debug)]

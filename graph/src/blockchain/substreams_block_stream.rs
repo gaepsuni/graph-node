@@ -5,16 +5,18 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tonic::Status;
 
-use graph::prelude::*;
-use graph::util::backoff::ExponentialBackoff;
+use crate::prelude::*;
+use crate::util::backoff::ExponentialBackoff;
 
-use graph::blockchain::block_stream::{BlockStream, BlockStreamEvent, BlockWithTriggers, FirehoseCursor};
-use graph::{firehose, firehose::FirehoseEndpoint, substreams};
-use graph::blockchain::Blockchain;
-use graph::substreams::{Modules, Request};
-use graph::substreams::response::Message;
-
-use crate::SubstreamBlock;
+use super::block_stream::SubstreamsMapper;
+use crate::blockchain::block_stream::{
+    BlockStream, BlockStreamEvent, BlockWithTriggers, FirehoseCursor,
+};
+use crate::blockchain::Blockchain;
+use crate::substreams::response::Message;
+use crate::substreams::ForkStep::{StepNew, StepUndo};
+use crate::substreams::{Modules, Request, Response};
+use crate::{firehose, firehose::FirehoseEndpoint};
 
 struct SubstreamsBlockStreamMetrics {
     deployment: DeploymentHash,
@@ -113,30 +115,28 @@ pub struct SubstreamsBlockStream<C: Blockchain> {
 }
 
 impl<C> SubstreamsBlockStream<C>
-    where
-        C: Blockchain,
+where
+    C: Blockchain,
 {
-    pub fn new(
+    pub fn new<F>(
         deployment: DeploymentHash,
         endpoint: Arc<FirehoseEndpoint>,
         subgraph_current_block: Option<BlockPtr>,
         cursor: Option<String>,
+        mapper: Arc<F>,
         modules: Option<Modules>,
         module_name: String,
         start_blocks: Vec<BlockNumber>,
         end_blocks: Vec<BlockNumber>,
         logger: Logger,
         registry: Arc<dyn MetricsRegistry>,
-    ) -> Self {
-        let manifest_start_block_num = start_blocks
-            .into_iter()
-            .min()
-            .unwrap_or(0);
+    ) -> Self
+    where
+        F: SubstreamsMapper<C> + 'static,
+    {
+        let manifest_start_block_num = start_blocks.into_iter().min().unwrap_or(0);
 
-        let manifest_end_block_num = end_blocks
-            .into_iter()
-            .min()
-            .unwrap_or(0);
+        let manifest_end_block_num = end_blocks.into_iter().min().unwrap_or(0);
 
         let metrics =
             SubstreamsBlockStreamMetrics::new(registry, deployment, endpoint.provider.clone());
@@ -145,6 +145,7 @@ impl<C> SubstreamsBlockStream<C>
             stream: Box::pin(stream_blocks(
                 endpoint,
                 cursor,
+                mapper,
                 modules,
                 module_name,
                 manifest_start_block_num,
@@ -157,9 +158,10 @@ impl<C> SubstreamsBlockStream<C>
     }
 }
 
-fn stream_blocks<C: Blockchain>(
+fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
     endpoint: Arc<FirehoseEndpoint>,
     cursor: Option<String>,
+    mapper: Arc<F>,
     modules: Option<Modules>,
     module_name: String,
     manifest_start_block_num: BlockNumber,
@@ -168,7 +170,7 @@ fn stream_blocks<C: Blockchain>(
     logger: Logger,
     metrics: SubstreamsBlockStreamMetrics,
 ) -> impl Stream<Item = Result<BlockStreamEvent<C>, Error>> {
-    use firehose::ForkStep::*;
+    // use firehose::ForkStep::*;
 
     let mut latest_cursor = cursor.unwrap_or_else(|| "".to_string());
 
@@ -189,7 +191,7 @@ fn stream_blocks<C: Blockchain>(
         stop_block_num,
         fork_steps: vec![StepNew as i32, StepUndo as i32],
         irreversibility_condition: "".to_string(),
-        modules: modules,
+        modules,
         output_modules: vec![module_name],
         ..Default::default()
     };
@@ -223,16 +225,15 @@ fn stream_blocks<C: Blockchain>(
                     for await response in stream{
                         match process_substreams_response(
                             response,
-                            &mut false,
-                            manifest_start_block_num,
-                            subgraph_current_block.as_ref(),
+                            mapper.as_ref(),
+                            // &mut false,
+                            // manifest_start_block_num,
+                            // subgraph_current_block.as_ref(),
                             &logger,
                         ).await {
                             Ok(block_response) => {
                                 match block_response {
-                                    None => {
-
-                                    }
+                                    None => {}
                                     Some(BlockResponse::Proceed(event, cursor)) => {
                                         debug!(&logger, "received event");
                                         // Reset backoff because we got a good value from the stream
@@ -292,43 +293,31 @@ enum BlockResponse<C: Blockchain> {
     Rewind(BlockPtr),
 }
 
-async fn process_substreams_response<C: Blockchain>(
-    result: Result<substreams::Response, Status>,
-    _check_subgraph_continuity: &mut bool,
-    _manifest_start_block_num: BlockNumber,
-    _subgraph_current_block: Option<&BlockPtr>,
+async fn process_substreams_response<C: Blockchain, F: SubstreamsMapper<C>>(
+    result: Result<Response, Status>,
+    mapper: &F,
     logger: &Logger,
-) -> Result<Option<BlockStreamEvent<C>>, Error> {
-    return match result {
-        Ok(v) => {
-            match v.message {
-                None => {
-                    Err(anyhow!("An error occurred while getting messages from response"))
-                }
-                Some(msg) => {
-                    debug!(&logger, "response found in the result");
-                    match msg {
-                        Message::Data(blk) => {
-                            debug!(&logger, "block scoped data found in the result");
-                            Ok(Some(BlockStreamEvent::ProcessBlock(
-                                BlockWithTriggers::new(
-                                    SubstreamBlock{
-                                        ..Default::default()
-                                    },
-                                    vec![]),
-                                FirehoseCursor::None
-                            )))
-                        }
-                        Message::Progress(_) => {
-                            debug!(&logger, "received progress");
-                            Ok(None)
-                        }
-                        _ => Ok(None)
-                    }
-                }
+) -> Result<Option<BlockResponse<C>>, Error> {
+    let response = match result {
+        Ok(v) => v,
+        Err(e) => return Err(anyhow!("An error occurred while streaming blocks: {:?}", e)),
+    };
+
+    match response.message.unwrap() {
+        Message::Data(block_scoped_data) => {
+            match mapper
+                .to_block_stream_event(logger, &block_scoped_data)
+                .await
+                .context("Mapping block to BlockStreamEvent failed")?
+            {
+                Some(event) => Ok(Some(BlockResponse::Proceed(
+                    event,
+                    block_scoped_data.cursor.to_string(),
+                ))),
+                None => Ok(None),
             }
-        },
-        Err(e) => Err(anyhow!("An error occurred while streaming blocks: {:?}", e)),
+        }
+        _ => Ok(None),
     }
 }
 
@@ -360,4 +349,3 @@ fn must_check_subgraph_continuity(
         _ => false,
     }
 }
-
