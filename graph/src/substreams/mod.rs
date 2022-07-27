@@ -1,16 +1,16 @@
 mod codec;
 
-pub use codec::*;
 use crate::blockchain;
 use crate::prelude::{BlockHash, BlockPtr};
+pub use codec::*;
 
 impl blockchain::Block for BlockScopedData {
     fn ptr(&self) -> BlockPtr {
         let clock = self.clock.as_ref().unwrap();
         return BlockPtr {
             hash: BlockHash(Box::from(hex::decode(&clock.id).unwrap())),
-            number: clock.number as i32
-        }
+            number: clock.number as i32,
+        };
     }
 
     fn parent_ptr(&self) -> Option<BlockPtr> {

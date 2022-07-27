@@ -5,7 +5,7 @@ use graph::{
     slog::Logger,
 };
 
-use crate::{Chain, DataSource, NodeCapabilities, SubstreamBlock, NoopDataSourceTemplate};
+use crate::{Chain, DataSource, NodeCapabilities, NoopDataSourceTemplate, SubstreamBlock};
 
 #[derive(Eq, PartialEq, PartialOrd, Ord, Debug)]
 pub struct TriggerData {}
