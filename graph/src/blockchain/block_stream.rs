@@ -292,8 +292,6 @@ pub enum BlockStreamEvent<C: Blockchain> {
     Revert(BlockPtr, FirehoseCursor),
 
     ProcessBlock(BlockWithTriggers<C>, FirehoseCursor),
-
-    ProcessSubstreamsBlock(BlockScopedData, FirehoseCursor)
 }
 
 impl<C: Blockchain> Clone for BlockStreamEvent<C>
@@ -304,7 +302,6 @@ where
         match self {
             Self::Revert(arg0, arg1) => Self::Revert(arg0.clone(), arg1.clone()),
             Self::ProcessBlock(arg0, arg1) => Self::ProcessBlock(arg0.clone(), arg1.clone()),
-            Self::ProcessSubstreamsBlock(arg0, arg1) => Self::ProcessSubstreamsBlock(arg0.clone(), arg1.clone())
         }
     }
 }

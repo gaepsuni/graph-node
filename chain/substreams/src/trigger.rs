@@ -4,7 +4,6 @@ use graph::{
     prelude::{async_trait, BlockNumber},
     slog::Logger,
 };
-use graph::substreams::BlockScopedData;
 
 use crate::{Chain, DataSource, NodeCapabilities, SubstreamBlock, NoopDataSourceTemplate};
 
@@ -56,7 +55,7 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
         &self,
         _ptr: BlockPtr,
         _offset: BlockNumber,
-    ) -> Result<Option<BlockScopedData>, Error> {
+    ) -> Result<Option<SubstreamBlock>, Error> {
         unimplemented!()
     }
 
@@ -72,7 +71,7 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
     async fn triggers_in_block(
         &self,
         _logger: &Logger,
-        _block: BlockScopedData,
+        _block: SubstreamBlock,
         _filter: &TriggerFilter,
     ) -> Result<BlockWithTriggers<Chain>, Error> {
         unimplemented!()

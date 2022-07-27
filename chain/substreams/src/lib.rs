@@ -1,7 +1,8 @@
 mod chain;
-mod codec;
 mod data_source;
 mod trigger;
+mod substreams_block_stream;
+pub mod codec;
 
 pub use chain::*;
 pub use trigger::*;
@@ -11,7 +12,7 @@ use graph::blockchain;
 use graph::blockchain::{BlockHash, BlockPtr};
 use crate::codec::EntitiesChanges;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SubstreamBlock {
     pub block_num: u64,
     pub block_hash: Vec<u8>,

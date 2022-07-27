@@ -9,7 +9,7 @@ use graph::{blockchain::{
 }, components::store::DeploymentLocator, data::subgraph::UnifiedMappingApiVersion, impl_slog_value, prelude::{async_trait, BlockNumber, ChainStore}, slog::Logger};
 use graph::substreams::BlockScopedData;
 
-use crate::{data_source::*, TriggerData, TriggerFilter, TriggersAdapter};
+use crate::{data_source::*, SubstreamBlock, TriggerData, TriggerFilter, TriggersAdapter};
 
 #[derive(Clone, Debug)]
 pub struct Block {}
@@ -53,7 +53,7 @@ impl graph::blockchain::NodeCapabilities<Chain> for NodeCapabilities {
 impl Blockchain for Chain {
     const KIND: BlockchainKind = BlockchainKind::Substream;
 
-    type Block = BlockScopedData;
+    type Block = SubstreamBlock;
     type DataSource = DataSource;
     type UnresolvedDataSource = UnresolvedDataSource;
 

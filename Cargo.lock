@@ -1652,6 +1652,7 @@ name = "graph-chain-substreams"
 version = "0.26.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "base64",
  "dirs-next",
  "envconfig",

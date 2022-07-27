@@ -7,6 +7,7 @@ edition = "2021"
 tonic-build = { version = "0.7.2", features = ["prost"] }
 
 [dependencies]
+async-stream = "0.3"
 envconfig = "0.10.0"
 futures = "0.1.21"
 http = "0.2.4"

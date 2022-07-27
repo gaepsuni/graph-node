@@ -5,15 +5,16 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tonic::Status;
 
-use crate::blockchain::block_stream::FirehoseCursor;
-use crate::prelude::*;
-use crate::util::backoff::ExponentialBackoff;
+use graph::prelude::*;
+use graph::util::backoff::ExponentialBackoff;
 
-use super::block_stream::{BlockStream, BlockStreamEvent};
-use super::Blockchain;
-use crate::{firehose, firehose::FirehoseEndpoint, substreams};
-use crate::substreams::{Modules, Request};
-use crate::substreams::response::Message;
+use graph::blockchain::block_stream::{BlockStream, BlockStreamEvent, BlockWithTriggers, FirehoseCursor};
+use graph::{firehose, firehose::FirehoseEndpoint, substreams};
+use graph::blockchain::Blockchain;
+use graph::substreams::{Modules, Request};
+use graph::substreams::response::Message;
+
+use crate::SubstreamBlock;
 
 struct SubstreamsBlockStreamMetrics {
     deployment: DeploymentHash,
@@ -175,16 +176,6 @@ fn stream_blocks<C: Blockchain>(
     let start_block_num = manifest_start_block_num as i64;
     let stop_block_num = manifest_end_block_num as u64;
 
-    // let mut check_subgraph_continuity = must_check_subgraph_continuity(
-    //     &logger,
-    //     &subgraph_current_block,
-    //     &latest_cursor,
-    //     manifest_start_block_num,
-    // );
-    // if check_subgraph_continuity {
-    //     debug!(&logger, "Going to check continuity of chain on first block");
-    // }
-
     // Back off exponentially whenever we encounter a connection error or a stream with bad data
     let mut backoff = ExponentialBackoff::new(Duration::from_millis(500), Duration::from_secs(45));
 
@@ -215,24 +206,6 @@ fn stream_blocks<C: Blockchain>(
 
             // We just reconnected, assume that we want to back off on errors
             skip_backoff = false;
-
-            // let mut request = firehose::Request {
-            //     start_block_num: start_block_num as i64,
-            //     start_cursor: latest_cursor.to_string(),
-            //     fork_steps: vec![StepNew as i32, StepUndo as i32],
-            //     ..Default::default()
-            // };
-            //
-            // let mut request = Request {
-            //     start_block_num,
-            //     stop_block_num,
-            //     start_cursor: latest_cursor,
-            //     fork_steps: vec![StepNew as i32, StepUndo as i32],
-            //     irreversibility_condition: "".to_string(),
-            //     modeules: modules.clone(),
-            //     output_modules: vec![module_name],
-            //     ..Default::default()
-            // };
 
             let mut connect_start = Instant::now();
             let result = endpoint.clone().substreams(request.clone()).await;
@@ -325,7 +298,7 @@ async fn process_substreams_response<C: Blockchain>(
     _manifest_start_block_num: BlockNumber,
     _subgraph_current_block: Option<&BlockPtr>,
     logger: &Logger,
-) -> Result<Option<BlockResponse<C>>, Error> {
+) -> Result<Option<BlockStreamEvent<C>>, Error> {
     return match result {
         Ok(v) => {
             match v.message {
@@ -337,9 +310,14 @@ async fn process_substreams_response<C: Blockchain>(
                     match msg {
                         Message::Data(blk) => {
                             debug!(&logger, "block scoped data found in the result");
-                            Ok(Some(BlockResponse::Proceed(BlockStreamEvent::ProcessSubstreamsBlock(
-                                blk,
-                                FirehoseCursor::None), "".to_string())))
+                            Ok(Some(BlockStreamEvent::ProcessBlock(
+                                BlockWithTriggers::new(
+                                    SubstreamBlock{
+                                        ..Default::default()
+                                    },
+                                    vec![]),
+                                FirehoseCursor::None
+                            )))
                         }
                         Message::Progress(_) => {
                             debug!(&logger, "received progress");
