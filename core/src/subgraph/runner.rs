@@ -21,7 +21,6 @@ use graph::util::{backoff::ExponentialBackoff, lfu_cache::LfuCache};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use graph::substreams::BlockScopedData;
 
 use super::TriggerProcessor;
 
