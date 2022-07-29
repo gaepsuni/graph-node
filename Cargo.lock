@@ -1646,6 +1646,7 @@ dependencies = [
  "envconfig",
  "futures 0.1.31",
  "graph",
+ "graph-core",
  "hex",
  "http",
  "itertools",

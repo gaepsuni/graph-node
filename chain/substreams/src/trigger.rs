@@ -1,11 +1,26 @@
+use std::{collections::HashMap, sync::Arc};
+
 use anyhow::Error;
 use graph::{
     blockchain::{self, block_stream::BlockWithTriggers, BlockPtr},
-    prelude::{async_trait, BlockNumber},
+    components::{
+        store::{DeploymentLocator, EntityType, SubgraphFork},
+        subgraph::{MappingError, ProofOfIndexingEvent, SharedProofOfIndexing},
+    },
+    data::store::scalar::Bytes,
+    prelude::{
+        anyhow, async_trait, BigDecimal, BigInt, BlockNumber, BlockState, Entity, EntityKey,
+        RuntimeHostBuilder, Value,
+    },
     slog::Logger,
 };
+use graph_core::SubgraphInstanceMetrics;
+use lazy_static::__Deref;
 
-use crate::{Block, Chain, DataSource, NodeCapabilities, NoopDataSourceTemplate};
+use crate::{
+    codec::{entity_change::Operation, field::Type},
+    Block, Chain, DataSource, NodeCapabilities, NoopDataSourceTemplate,
+};
 
 #[derive(Eq, PartialEq, PartialOrd, Ord, Debug)]
 pub struct TriggerData {}
@@ -83,5 +98,137 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
 
     async fn parent_ptr(&self, _block: &BlockPtr) -> Result<Option<BlockPtr>, Error> {
         unimplemented!()
+    }
+}
+
+fn write_poi_event(
+    proof_of_indexing: &SharedProofOfIndexing,
+    poi_event: &ProofOfIndexingEvent,
+    causality_region: &str,
+    logger: &Logger,
+) {
+    if let Some(proof_of_indexing) = proof_of_indexing {
+        let mut proof_of_indexing = proof_of_indexing.deref().borrow_mut();
+        proof_of_indexing.write(logger, causality_region, poi_event);
+    }
+}
+
+pub struct TriggerProcessor {
+    pub locator: DeploymentLocator,
+}
+
+impl TriggerProcessor {
+    pub fn new(locator: DeploymentLocator) -> Self {
+        Self { locator }
+    }
+}
+
+#[async_trait]
+impl<T> graph_core::TriggerProcessor<Chain, T> for TriggerProcessor
+where
+    T: RuntimeHostBuilder<Chain>,
+{
+    async fn process_trigger(
+        &self,
+        logger: &Logger,
+        _hosts: &[Arc<T::Host>],
+        block: &Arc<Block>,
+        _trigger: &TriggerData,
+        mut state: BlockState<Chain>,
+        proof_of_indexing: &SharedProofOfIndexing,
+        causality_region: &str,
+        _debug_fork: &Option<Arc<dyn SubgraphFork>>,
+        _subgraph_metrics: &Arc<SubgraphInstanceMetrics>,
+    ) -> Result<BlockState<Chain>, MappingError> {
+        for entity_change in block.entities_changes.entity_changes.iter() {
+            match entity_change.operation() {
+                Operation::Unset => {
+                    // Potentially an issue with the server side or
+                    // we are running an outdated version. In either case we should abort.
+                    return Err(MappingError::Unknown(anyhow!("Detected UNSET entity operation, either a server error or there's a new type of operation and we're running an outdated protobuf")));
+                }
+                Operation::Create | Operation::Update => {
+                    let entity_type: &str = &entity_change.entity;
+                    let entity_id: String = String::from_utf8(entity_change.id.clone())
+                        .map_err(|e| MappingError::Unknown(anyhow::Error::from(e)))?;
+                    let key = EntityKey {
+                        subgraph_id: self.locator.hash.clone(),
+                        entity_type: EntityType::new(entity_type.into()),
+                        entity_id: entity_id.clone(),
+                    };
+
+                    // let fields = entity_change.fields.iter().map(|field| (field.name, ));
+
+                    let mut data: HashMap<String, Value> = HashMap::from_iter(vec![]);
+                    for field in entity_change.fields.iter() {
+                        let value: Value = match (field.value_type(), field.new_value_null) {
+                            (Type::Unset, _) => {
+                                return Err(MappingError::Unknown(anyhow!(
+                                    "Invalid field type, the protobuf probably needs updating"
+                                )))
+                            }
+                            (Type::Bigdecimal, false) => {
+                                match BigDecimal::parse_bytes(field.new_value.as_ref()) {
+                                    Some(bd) => Value::BigDecimal(bd),
+                                    None => {
+                                        return Err(MappingError::Unknown(anyhow!(
+                                            "Unable to parse BigDecimal for entity {}",
+                                            entity_change.entity
+                                        )))
+                                    }
+                                }
+                            }
+                            (Type::Bigint, false) => Value::BigInt(BigInt::from_signed_bytes_be(
+                                field.new_value.as_ref(),
+                            )),
+                            (Type::Int, false) => {
+                                let mut bytes: [u8; 4] = [0; 4];
+                                bytes.copy_from_slice(field.new_value.as_ref());
+                                Value::Int(i32::from_be_bytes(bytes))
+                            }
+                            (Type::Bytes, false) => {
+                                Value::Bytes(Bytes::from(field.new_value.as_ref()))
+                            }
+                            (Type::String, false) => Value::String(
+                                String::from_utf8(field.new_value.clone())
+                                    .map_err(|e| MappingError::Unknown(anyhow::Error::from(e)))?,
+                            ),
+                            _ => {
+                                return Err(MappingError::Unknown(anyhow!(
+                                    "received substream new_value null, type {} field {}",
+                                    entity_change.entity,
+                                    field.name
+                                )))
+                            }
+                        };
+                        data.entry(field.name.clone()).or_insert(value);
+                    }
+
+                    write_poi_event(
+                        proof_of_indexing,
+                        &ProofOfIndexingEvent::SetEntity {
+                            entity_type: &entity_type,
+                            id: &entity_id,
+                            data: &data,
+                        },
+                        causality_region,
+                        logger,
+                    );
+
+                    state.entity_cache.set(key, Entity::from(data))?;
+                }
+                Operation::Delete => {
+                    let key = EntityKey {
+                        subgraph_id: self.locator.hash.clone(),
+                        entity_type: EntityType::new("some-type".into()),
+                        entity_id: entity_change.entity.as_str().into(),
+                    };
+
+                    state.entity_cache.remove(key);
+                }
+            }
+        }
+
+        Ok(state)
     }
 }
