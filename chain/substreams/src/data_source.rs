@@ -10,7 +10,7 @@ use graph::{
 };
 use serde::Deserialize;
 
-use crate::{chain::Chain, SubstreamBlock, TriggerData};
+use crate::{chain::Chain, Block, TriggerData};
 
 pub const SUBSTREAMS_KIND: &str = "substreams";
 
@@ -81,7 +81,7 @@ impl blockchain::DataSource<Chain> for DataSource {
     fn match_and_decode(
         &self,
         _trigger: &TriggerData,
-        _block: &Arc<SubstreamBlock>,
+        _block: &Arc<Block>,
         _logger: &Logger,
     ) -> Result<Option<blockchain::TriggerWithHandler<Chain>>, Error> {
         unimplemented!()

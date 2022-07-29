@@ -1,38 +1,34 @@
 mod chain;
 pub mod codec;
 mod data_source;
+pub mod mapper;
 mod trigger;
-
+use crate::codec::EntitiesChanges;
 pub use chain::*;
 pub use data_source::*;
-pub use trigger::*;
-
-use crate::codec::EntitiesChanges;
 use graph::blockchain;
 use graph::blockchain::{BlockHash, BlockPtr};
+use graph::prelude::BlockNumber;
+pub use trigger::*;
 
 #[derive(Clone, Debug, Default)]
-pub struct SubstreamBlock {
-    pub block_num: u64,
-    pub block_hash: Vec<u8>,
-    pub parent_block_num: u64,
-    pub parent_block_hash: Vec<u8>,
+pub struct Block {
+    pub block_num: BlockNumber,
+    pub block_hash: BlockHash,
+    pub parent_block_num: BlockNumber,
+    pub parent_block_hash: BlockHash,
     pub entities_changes: EntitiesChanges,
 }
 
-impl blockchain::Block for SubstreamBlock {
+impl blockchain::Block for Block {
     fn ptr(&self) -> BlockPtr {
         return BlockPtr {
-            hash: BlockHash(Box::from(self.block_hash.as_slice())),
+            hash: self.block_hash.clone(),
             number: self.block_num as i32,
         };
     }
 
     fn parent_ptr(&self) -> Option<BlockPtr> {
-        if self.parent_block_hash.is_empty() {
-            return None;
-        }
-
         Some(BlockPtr {
             hash: BlockHash(Box::from(self.parent_block_hash.as_slice())),
             number: self.parent_block_num as i32,

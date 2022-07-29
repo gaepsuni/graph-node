@@ -1,22 +1,18 @@
+use super::block_stream::SubstreamsMapper;
+use crate::blockchain::block_stream::{BlockStream, BlockStreamEvent};
+use crate::blockchain::Blockchain;
+use crate::firehose::FirehoseEndpoint;
+use crate::prelude::*;
+use crate::substreams::response::Message;
+use crate::substreams::ForkStep::{StepNew, StepUndo};
+use crate::substreams::{Modules, Request, Response};
+use crate::util::backoff::ExponentialBackoff;
 use async_stream::try_stream;
 use futures03::{Stream, StreamExt};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tonic::Status;
-
-use crate::prelude::*;
-use crate::util::backoff::ExponentialBackoff;
-
-use super::block_stream::SubstreamsMapper;
-use crate::blockchain::block_stream::{
-    BlockStream, BlockStreamEvent, BlockWithTriggers, FirehoseCursor,
-};
-use crate::blockchain::Blockchain;
-use crate::substreams::response::Message;
-use crate::substreams::ForkStep::{StepNew, StepUndo};
-use crate::substreams::{Modules, Request, Response};
-use crate::{firehose, firehose::FirehoseEndpoint};
 
 struct SubstreamsBlockStreamMetrics {
     deployment: DeploymentHash,
@@ -166,24 +162,14 @@ fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
     module_name: String,
     manifest_start_block_num: BlockNumber,
     manifest_end_block_num: BlockNumber,
-    subgraph_current_block: Option<BlockPtr>,
+    _subgraph_current_block: Option<BlockPtr>,
     logger: Logger,
     metrics: SubstreamsBlockStreamMetrics,
 ) -> impl Stream<Item = Result<BlockStreamEvent<C>, Error>> {
-    // use firehose::ForkStep::*;
-
     let mut latest_cursor = cursor.unwrap_or_else(|| "".to_string());
 
-    let subgraph_current_block = subgraph_current_block;
     let start_block_num = manifest_start_block_num as i64;
     let stop_block_num = manifest_end_block_num as u64;
-
-    // Back off exponentially whenever we encounter a connection error or a stream with bad data
-    let mut backoff = ExponentialBackoff::new(Duration::from_millis(500), Duration::from_secs(45));
-
-    // This attribute is needed because `try_stream!` seems to break detection of `skip_backoff` assignments
-    #[allow(unused_assignments)]
-    let mut skip_backoff = false;
 
     let request = Request {
         start_block_num,
@@ -196,11 +182,18 @@ fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
         ..Default::default()
     };
 
+    // Back off exponentially whenever we encounter a connection error or a stream with bad data
+    let mut backoff = ExponentialBackoff::new(Duration::from_millis(500), Duration::from_secs(45));
+
+    // This attribute is needed because `try_stream!` seems to break detection of `skip_backoff` assignments
+    #[allow(unused_assignments)]
+    let mut skip_backoff = false;
+
     try_stream! {
         loop {
             info!(
                 &logger,
-                "Blockstream disconnected, connecting";
+                "Blockstreams disconnected, connecting";
                 "endpoint_uri" => format_args!("{}", endpoint),
                 "start_block" => start_block_num,
                 "cursor" => &latest_cursor,
@@ -214,10 +207,10 @@ fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
 
             match result {
                 Ok(stream) => {
-                    info!(&logger, "Blockstream connected");
+                    info!(&logger, "Blockstreams connected");
 
-                    // // Track the time it takes to set up the block stream
-                    // metrics.observe_successful_connection(&mut connect_start);
+                    // Track the time it takes to set up the block stream
+                    metrics.observe_successful_connection(&mut connect_start);
 
                     let mut last_response_time = Instant::now();
                     let mut expected_stream_end = false;
@@ -226,16 +219,12 @@ fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
                         match process_substreams_response(
                             response,
                             mapper.as_ref(),
-                            // &mut false,
-                            // manifest_start_block_num,
-                            // subgraph_current_block.as_ref(),
                             &logger,
                         ).await {
                             Ok(block_response) => {
                                 match block_response {
                                     None => {}
                                     Some(BlockResponse::Proceed(event, cursor)) => {
-                                        debug!(&logger, "received event");
                                         // Reset backoff because we got a good value from the stream
                                         backoff.reset();
 
@@ -245,7 +234,6 @@ fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
 
                                         latest_cursor = cursor;
                                     }
-                                    _ => {}
                                 }
                             },
                             Err(err) => {
@@ -290,7 +278,6 @@ fn stream_blocks<C: Blockchain, F: SubstreamsMapper<C>>(
 
 enum BlockResponse<C: Blockchain> {
     Proceed(BlockStreamEvent<C>, String),
-    Rewind(BlockPtr),
 }
 
 async fn process_substreams_response<C: Blockchain, F: SubstreamsMapper<C>>(
@@ -330,22 +317,3 @@ impl<C: Blockchain> Stream for SubstreamsBlockStream<C> {
 }
 
 impl<C: Blockchain> BlockStream<C> for SubstreamsBlockStream<C> {}
-
-fn must_check_subgraph_continuity(
-    logger: &Logger,
-    subgraph_current_block: &Option<BlockPtr>,
-    subgraph_cursor: &String,
-    subgraph_manifest_start_block_number: i32,
-) -> bool {
-    match subgraph_current_block {
-        Some(current_block) if subgraph_cursor.is_empty() => {
-            debug!(&logger, "Checking if subgraph current block is after manifest start block";
-                "subgraph_current_block_number" => current_block.number,
-                "manifest_start_block_number" => subgraph_manifest_start_block_number,
-            );
-
-            current_block.number >= subgraph_manifest_start_block_number
-        }
-        _ => false,
-    }
-}

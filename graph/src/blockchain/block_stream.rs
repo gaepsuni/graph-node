@@ -10,8 +10,8 @@ use super::{Block, BlockPtr, Blockchain};
 use crate::anyhow::Result;
 use crate::components::store::{BlockNumber, DeploymentLocator};
 use crate::data::subgraph::UnifiedMappingApiVersion;
+use crate::firehose;
 use crate::substreams::BlockScopedData;
-use crate::{firehose, substreams};
 use crate::{prelude::*, prometheus::labels};
 
 pub struct BufferedBlockStream<C: Blockchain> {

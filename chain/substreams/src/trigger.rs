@@ -5,7 +5,7 @@ use graph::{
     slog::Logger,
 };
 
-use crate::{Chain, DataSource, NodeCapabilities, NoopDataSourceTemplate, SubstreamBlock};
+use crate::{Block, Chain, DataSource, NodeCapabilities, NoopDataSourceTemplate};
 
 #[derive(Eq, PartialEq, PartialOrd, Ord, Debug)]
 pub struct TriggerData {}
@@ -55,7 +55,7 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
         &self,
         _ptr: BlockPtr,
         _offset: BlockNumber,
-    ) -> Result<Option<SubstreamBlock>, Error> {
+    ) -> Result<Option<Block>, Error> {
         unimplemented!()
     }
 
@@ -71,7 +71,7 @@ impl blockchain::TriggersAdapter<Chain> for TriggersAdapter {
     async fn triggers_in_block(
         &self,
         _logger: &Logger,
-        _block: SubstreamBlock,
+        _block: Block,
         _filter: &TriggerFilter,
     ) -> Result<BlockWithTriggers<Chain>, Error> {
         unimplemented!()

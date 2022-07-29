@@ -1,28 +1,19 @@
-use std::env;
-use std::sync::Arc;
-use std::task::Poll;
-
 use anyhow::{format_err, Context, Error};
 use graph::blockchain::block_stream::BlockStreamEvent;
-use graph::blockchain::substreams_block_stream;
-use graph::prelude::{info, tokio, tonic::Streaming, DeploymentHash, Registry};
-use graph::slog::Logger;
-
 use graph::blockchain::substreams_block_stream::SubstreamsBlockStream;
-use graph::substreams::module_output::Data;
-use graph::substreams::module_output::Data::{MapOutput, StoreDeltas};
-use graph::substreams::ModuleOutput;
-use graph::tokio_stream::{Stream, StreamExt};
+use graph::prelude::{info, tokio, DeploymentHash, Registry};
+use graph::tokio_stream::StreamExt;
 use graph::{
     env::env_var,
     firehose::FirehoseEndpoint,
     log::logger,
-    substreams::{self, ForkStep},
+    substreams::{self},
 };
-use graph_chain_substreams::codec::EntitiesChanges;
-use graph_chain_substreams::{Chain, Mapper, SubstreamBlock};
+use graph_chain_substreams::mapper::Mapper;
 use graph_core::MetricsRegistry;
-use prost::{DecodeError, Message};
+use prost::Message;
+use std::env;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -58,22 +49,23 @@ async fn main() -> Result<(), Error> {
         FirehoseEndpoint::new(logger.clone(), "substreams", &endpoint, token, false).await?,
     );
 
-    let mut sbs: SubstreamsBlockStream<graph_chain_substreams::Chain> = SubstreamsBlockStream::new(
-        DeploymentHash::new("substreams".to_string()).unwrap(),
-        firehose.clone(),
-        None,
-        None,
-        Arc::new(Mapper {}),
-        package.modules.clone(),
-        module_name.to_string(),
-        vec![12369621],
-        vec![12370000],
-        logger.clone(),
-        metrics_registry,
-    );
+    let mut stream: SubstreamsBlockStream<graph_chain_substreams::Chain> =
+        SubstreamsBlockStream::new(
+            DeploymentHash::new("substreams".to_string()).unwrap(),
+            firehose.clone(),
+            None,
+            None,
+            Arc::new(Mapper {}),
+            package.modules.clone(),
+            module_name.to_string(),
+            vec![12369621],
+            vec![12370000],
+            logger.clone(),
+            metrics_registry,
+        );
 
     loop {
-        match sbs.next().await {
+        match stream.next().await {
             None => {
                 break;
             }
@@ -106,6 +98,5 @@ async fn main() -> Result<(), Error> {
 
 fn read_package(file: &str) -> Result<substreams::Package, anyhow::Error> {
     let content = std::fs::read(file).context(format_err!("read package {}", file))?;
-
     substreams::Package::decode(content.as_ref()).context("decode command")
 }
