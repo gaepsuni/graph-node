@@ -44,7 +44,7 @@ where
         host_builder: T,
         trigger_processor: TP,
         host_metrics: Arc<HostMetrics>,
-        offchain_monitor: &OffchainMonitor,
+        offchain_monitor: &mut OffchainMonitor,
     ) -> Result<Self, Error> {
         let subgraph_id = manifest.id.clone();
         let network = manifest.network_name();
@@ -78,8 +78,8 @@ where
 
             // Create services for static offchain data sources
             if let DataSource::Offchain(ds) = &ds {
-                if let Some(source) = &ds.source {
-                    offchain_monitor.monitor(source.clone());
+                if ds.source.is_some() {
+                    offchain_monitor.add_data_source(ds.clone())?;
                 }
             }
 

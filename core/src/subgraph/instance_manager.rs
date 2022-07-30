@@ -254,7 +254,7 @@ impl<S: SubgraphStore> SubgraphInstanceManager<S> {
             stopwatch_metrics,
         ));
 
-        let (offchain_monitor, offchain_monitor_rx) = OffchainMonitor::new(
+        let mut offchain_monitor = OffchainMonitor::new(
             logger.cheap_clone(),
             registry.cheap_clone(),
             &manifest.id,
@@ -282,7 +282,7 @@ impl<S: SubgraphStore> SubgraphInstanceManager<S> {
             host_builder,
             trigger_processor,
             host_metrics.clone(),
-            &offchain_monitor,
+            &mut offchain_monitor,
         )?;
 
         let inputs = IndexingInputs {
@@ -305,7 +305,6 @@ impl<S: SubgraphStore> SubgraphInstanceManager<S> {
             instances: self.instances.cheap_clone(),
             filter,
             offchain_monitor,
-            offchain_monitor_rx,
         };
 
         let metrics = RunnerMetrics {

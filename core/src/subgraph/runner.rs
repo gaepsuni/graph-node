@@ -16,7 +16,7 @@ use graph::data::subgraph::{
     schema::{SubgraphError, SubgraphHealth, POI_OBJECT},
     SubgraphFeature,
 };
-use graph::data_source::DataSource;
+use graph::data_source::{self, offchain, DataSource};
 use graph::prelude::*;
 use graph::util::{backoff::ExponentialBackoff, lfu_cache::LfuCache};
 use std::convert::TryFrom;
@@ -117,6 +117,8 @@ where
 
             // Process events from the stream as long as no restart is needed
             loop {
+                self.handle_offchain_queue().await;
+
                 let event = {
                     let _section = self.metrics.stream.stopwatch.start_section("scan_blocks");
 
@@ -225,9 +227,18 @@ where
             let (data_sources, runtime_hosts) =
                 self.create_dynamic_data_sources(block_state.drain_created_data_sources())?;
 
-            let filter = C::TriggerFilter::from_data_sources(
-                data_sources.iter().filter_map(|ds| ds.as_onchain()),
-            );
+            let mut onchain_data_sources = Vec::new();
+            for ds in data_sources {
+                match ds {
+                    DataSource::Onchain(ds) => onchain_data_sources.push(ds),
+                    DataSource::Offchain(ds) => {
+                        self.ctx.offchain_monitor.add_data_source(ds.clone())?
+                    }
+                }
+            }
+            let data_sources = onchain_data_sources;
+
+            let filter = C::TriggerFilter::from_data_sources(data_sources.iter());
 
             // Reprocess the triggers from this block that match the new data sources
             let block_with_triggers = self
@@ -253,7 +264,10 @@ where
 
             // Add entity operations for the new data sources to the block state
             // and add runtimes for the data sources to the subgraph instance.
-            self.persist_dynamic_data_sources(&mut block_state.entity_cache, data_sources);
+            self.persist_dynamic_data_sources(
+                &mut block_state.entity_cache,
+                data_sources.into_iter().map(DataSource::Onchain).collect(),
+            );
 
             // Process the triggers in each host in the same order the
             // corresponding data sources have been created.
@@ -559,6 +573,43 @@ where
         };
 
         Ok(action)
+    }
+
+    async fn handle_offchain_queue(&mut self) {
+        loop {
+            if let Ok((cid, data)) = self.ctx.offchain_monitor.ipfs_monitor_rx.try_recv() {
+                self.handle_offchain_update(offchain::Source::Ipfs(cid), data)
+                    .await;
+                continue;
+            }
+            break;
+        }
+    }
+
+    async fn handle_offchain_update(&mut self, source: offchain::Source, data: bytes::Bytes) {
+        let matching_data_sources = self
+            .ctx
+            .offchain_monitor
+            .data_sources
+            .iter()
+            .filter(|ds| ds.source.as_ref() == Some(&source));
+        let data = Arc::new(data);
+
+        let mut block_state =
+            BlockState::<C>::new(self.inputs.store.cheap_clone(), LfuCache::new());
+        let mut entity_cache = std::mem::take(&mut self.state.entity_lfu_cache);
+
+        self.persist_dynamic_data_sources(
+            &mut block_state.entity_cache,
+            matching_data_sources
+                .cloned()
+                .map(data_source::DataSource::Offchain)
+                .collect(),
+        );
+
+        // TODO: run mapping/process_trigger, PoI?
+        // NTS: just error on any data sources created for now
+        todo!();
     }
 }
 
